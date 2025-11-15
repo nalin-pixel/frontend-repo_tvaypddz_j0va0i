@@ -27,21 +27,20 @@ function App() {
   const [error, setError] = useState('')
   const [downloading, setDownloading] = useState(false)
 
-  const previewRef = useRef(null)
+  // Only capture this node so buttons are excluded
+  const receiptRef = useRef(null)
 
   const backend = import.meta.env.VITE_BACKEND_URL || 'http://localhost:8000'
 
   useEffect(() => {
     setError('')
-  }, [customerName, itemName, itemQty, itemPrice, items])
+  }, [customerName, itemName, itemQty, itemPrice, items, notes])
 
-  const subtotal = useMemo(() => {
-    return items.reduce((s, it) => s + it.quantity * it.price, 0)
-  }, [items])
+  const subtotal = useMemo(() => items.reduce((s, it) => s + it.quantity * it.price, 0), [items])
 
   const addItem = () => {
     if (!itemName.trim()) return setError('Nama item wajib diisi')
-    const qty = Number(itemQty) || 1
+    const qty = Math.max(1, Number(itemQty) || 1)
     const price = Number(itemPrice)
     if (isNaN(price)) return setError('Harga harus angka')
     setItems(prev => [...prev, { name: itemName.trim(), quantity: qty, price }])
@@ -50,9 +49,7 @@ function App() {
     setItemPrice('')
   }
 
-  const removeItem = (idx) => {
-    setItems(prev => prev.filter((_, i) => i !== idx))
-  }
+  const removeItem = (idx) => setItems(prev => prev.filter((_, i) => i !== idx))
 
   const resetAll = () => {
     setCustomerName('')
@@ -70,19 +67,13 @@ function App() {
       const res = await fetch(`${backend}/api/receipts`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          customer_name: customerName || null,
-          items,
-          notes: notes || null,
-        }),
+        body: JSON.stringify({ customer_name: customerName || null, items, notes: notes || null }),
       })
       if (!res.ok) throw new Error(await res.text())
       const data = await res.json()
       setReceipt(data)
-      // Prepare for next receipt quickly
-      setItems([])
-      setCustomerName('')
-      setNotes('')
+      // Keep a copy of created items on the preview
+      setItems(data.items || [])
     } catch (e) {
       setError(`Gagal membuat struk: ${e.message?.slice(0, 120)}`)
     } finally {
@@ -90,219 +81,203 @@ function App() {
     }
   }
 
-  const downloadReceipt = async () => {
-    if (!receipt) return
+  const downloadPNG = async () => {
+    if (!receipt) return setError('Buat struk terlebih dahulu')
+    const node = receiptRef.current
+    if (!node) return
     try {
       setDownloading(true)
-      const node = previewRef.current
-      if (!node) return
       const canvas = await html2canvas(node, {
         backgroundColor: '#ffffff',
-        scale: window.devicePixelRatio < 2 ? 2 : window.devicePixelRatio,
+        scale: 3, // tajam untuk kirim via chat
         useCORS: true,
+        allowTaint: false,
+        imageTimeout: 15000,
+        logging: false,
       })
       const dataUrl = canvas.toDataURL('image/png')
-      const link = document.createElement('a')
-      const number = `#${receipt.number.toString().padStart(4, '0')}`
-      link.download = `${BRAND.name}_Receipt_${number}.png`
-      link.href = dataUrl
-      link.click()
+      const a = document.createElement('a')
+      const number = `#${String(receipt.number).padStart(4, '0')}`
+      a.download = `${BRAND.name}_Struk_${number}.png`
+      a.href = dataUrl
+      a.click()
     } catch (e) {
-      setError('Gagal mengunduh struk. Coba lagi.')
+      setError('Gagal mengunduh struk. Pastikan logo bisa dimuat dan coba lagi.')
     } finally {
       setDownloading(false)
     }
   }
 
+  // Render helpers
+  const renderItems = (list) => {
+    if (!list || list.length === 0) return (
+      <div className="text-center text-xs text-slate-500 py-3">Belum ada item</div>
+    )
+    return list.map((it, idx) => (
+      <div key={idx} className="flex text-[13px] leading-5">
+        <div className="flex-1 pr-2 break-words">{it.name}</div>
+        <div className="w-14 text-right">{it.quantity}x</div>
+        <div className="w-28 text-right">{currency(it.price)}</div>
+      </div>
+    ))
+  }
+
+  const liveSubtotal = useMemo(() => {
+    const base = receipt?.items ? receipt.items : items
+    return base.reduce((s, it) => s + it.quantity * it.price, 0)
+  }, [receipt, items])
+
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-950 via-indigo-950 to-fuchsia-900 text-white">
-      <header className="px-6 py-5 flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <img src={BRAND.logo} alt="logo" className="h-10 w-10 rounded-lg shadow-md ring-2 ring-white/20" />
-          <div>
-            <h1 className="text-xl font-semibold tracking-wide">{BRAND.name}</h1>
-            <p className="text-xs text-white/70">Nomor: {BRAND.phone}</p>
+    <div className="min-h-screen bg-neutral-100">
+      {/* Top bar */}
+      <div className="sticky top-0 z-10 bg-white/80 backdrop-blur border-b">
+        <div className="max-w-6xl mx-auto px-4 py-3 flex items-center gap-3">
+          <img src={BRAND.logo} alt="logo" crossOrigin="anonymous" className="h-8 w-8 rounded" />
+          <div className="leading-tight">
+            <p className="font-semibold text-sm">{BRAND.name}</p>
+            <p className="text-xs text-slate-500">Nomor: {BRAND.phone}</p>
+          </div>
+          <div className="ml-auto flex items-center gap-2">
+            <button onClick={downloadPNG} disabled={!receipt || downloading} className="px-3 py-2 rounded bg-black text-white text-sm disabled:opacity-50">
+              {downloading ? 'Menyiapkan…' : 'Unduh PNG'}
+            </button>
+            <button onClick={resetAll} className="px-3 py-2 rounded border text-sm">Reset</button>
           </div>
         </div>
-        <div className="text-right">
-          <p className="text-xs text-white/60">Generator Struk Otomatis</p>
-          <p className="text-xs text-white/60">Nomor struk berurutan</p>
-        </div>
-      </header>
+      </div>
 
-      <main className="px-6 pb-24">
-        <div className="grid lg:grid-cols-2 gap-6 max-w-6xl mx-auto">
-          {/* Builder Panel */}
-          <section className="bg-white/10 backdrop-blur-md rounded-2xl p-5 border border-white/10 shadow-xl">
-            <h2 className="text-lg font-semibold mb-4">Data Struk</h2>
+      <div className="max-w-6xl mx-auto px-4 py-6 grid lg:grid-cols-2 gap-6">
+        {/* Builder */}
+        <section className="bg-white border rounded-xl p-4">
+          <h2 className="font-semibold mb-3">Buat Struk</h2>
 
-            <div className="space-y-4">
-              <div className="grid sm:grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-sm text-white/80 mb-1">Atas Nama (opsional)</label>
-                  <input value={customerName} onChange={e=>setCustomerName(e.target.value)} placeholder="Nama pelanggan" className="w-full rounded-lg bg-white/10 border border-white/20 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-fuchsia-400" />
-                </div>
-                <div>
-                  <label className="block text-sm text-white/80 mb-1">Catatan (opsional)</label>
-                  <input value={notes} onChange={e=>setNotes(e.target.value)} placeholder="Tuliskan catatan singkat" className="w-full rounded-lg bg-white/10 border border-white/20 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-fuchsia-400" />
-                </div>
+          <div className="grid sm:grid-cols-2 gap-3 mb-3">
+            <div>
+              <label className="text-sm text-slate-600">Atas Nama (opsional)</label>
+              <input value={customerName} onChange={e=>setCustomerName(e.target.value)} placeholder="Nama pelanggan" className="mt-1 w-full rounded border px-3 py-2 text-sm" />
+            </div>
+            <div>
+              <label className="text-sm text-slate-600">Catatan (opsional)</label>
+              <input value={notes} onChange={e=>setNotes(e.target.value)} placeholder="Contoh: Harap simpan invoice" className="mt-1 w-full rounded border px-3 py-2 text-sm" />
+            </div>
+          </div>
+
+          <div className="grid grid-cols-12 gap-3 items-end">
+            <div className="col-span-6">
+              <label className="text-sm text-slate-600">Nama Item</label>
+              <input value={itemName} onChange={e=>setItemName(e.target.value)} placeholder="Contoh: Produk A" className="mt-1 w-full rounded border px-3 py-2 text-sm" />
+            </div>
+            <div className="col-span-2">
+              <label className="text-sm text-slate-600">Qty</label>
+              <input type="number" min="1" value={itemQty} onChange={e=>setItemQty(e.target.value)} className="mt-1 w-full rounded border px-3 py-2 text-sm" />
+            </div>
+            <div className="col-span-4">
+              <label className="text-sm text-slate-600">Harga (IDR)</label>
+              <input type="number" value={itemPrice} onChange={e=>setItemPrice(e.target.value)} placeholder="0" className="mt-1 w-full rounded border px-3 py-2 text-sm" />
+            </div>
+            <div className="col-span-12">
+              <button onClick={addItem} className="w-full bg-black text-white rounded py-2 text-sm">Tambah Item</button>
+            </div>
+          </div>
+
+          {items.length > 0 && (
+            <div className="mt-3 border rounded-lg p-3 bg-slate-50">
+              <div className="text-xs text-slate-600 mb-2">Daftar Item</div>
+              <div className="space-y-2">
+                {items.map((it, idx) => (
+                  <div key={idx} className="flex items-start text-sm">
+                    <div className="flex-1 pr-2">
+                      <div className="font-medium">{it.name}</div>
+                      <div className="text-xs text-slate-500">{it.quantity} x {currency(it.price)}</div>
+                    </div>
+                    <div className="text-right font-medium">{currency(it.quantity * it.price)}</div>
+                    <button onClick={()=>removeItem(idx)} className="ml-3 text-xs text-red-600">Hapus</button>
+                  </div>
+                ))}
               </div>
-
-              <div className="grid grid-cols-12 gap-3 items-end">
-                <div className="col-span-6">
-                  <label className="block text-sm text-white/80 mb-1">Nama Item</label>
-                  <input value={itemName} onChange={e=>setItemName(e.target.value)} placeholder="Contoh: Layanan A" className="w-full rounded-lg bg-white/10 border border-white/20 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-fuchsia-400" />
-                </div>
-                <div className="col-span-2">
-                  <label className="block text-sm text-white/80 mb-1">Qty</label>
-                  <input type="number" min="1" value={itemQty} onChange={e=>setItemQty(e.target.value)} className="w-full rounded-lg bg-white/10 border border-white/20 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-fuchsia-400" />
-                </div>
-                <div className="col-span-4">
-                  <label className="block text-sm text-white/80 mb-1">Harga (IDR)</label>
-                  <input type="number" value={itemPrice} onChange={e=>setItemPrice(e.target.value)} placeholder="0" className="w-full rounded-lg bg-white/10 border border-white/20 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-fuchsia-400" />
-                </div>
-                <div className="col-span-12">
-                  <button onClick={addItem} className="w-full bg-fuchsia-500 hover:bg-fuchsia-600 active:bg-fuchsia-700 text-white font-medium py-2 rounded-lg transition-colors">Tambah Item</button>
-                </div>
-              </div>
-
-              {items.length > 0 && (
-                <div className="mt-2 border border-white/10 rounded-xl overflow-hidden">
-                  <table className="w-full text-sm">
-                    <thead className="bg-white/10">
-                      <tr>
-                        <th className="text-left px-3 py-2 font-medium">Item</th>
-                        <th className="text-right px-3 py-2 font-medium">Qty</th>
-                        <th className="text-right px-3 py-2 font-medium">Harga</th>
-                        <th className="text-right px-3 py-2 font-medium">Total</th>
-                        <th className="px-3 py-2"></th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {items.map((it, idx) => (
-                        <tr key={idx} className="odd:bg-white/0 even:bg-white/5">
-                          <td className="px-3 py-2">{it.name}</td>
-                          <td className="px-3 py-2 text-right">{it.quantity}</td>
-                          <td className="px-3 py-2 text-right">{currency(it.price)}</td>
-                          <td className="px-3 py-2 text-right">{currency(it.quantity * it.price)}</td>
-                          <td className="px-3 py-2 text-right">
-                            <button onClick={()=>removeItem(idx)} className="text-red-300 hover:text-red-200">Hapus</button>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                    <tfoot>
-                      <tr>
-                        <td className="px-3 py-3 font-semibold" colSpan={3}>Subtotal</td>
-                        <td className="px-3 py-3 font-semibold text-right">{currency(subtotal)}</td>
-                        <td></td>
-                      </tr>
-                    </tfoot>
-                  </table>
-                </div>
-              )}
-
-              {error && (
-                <div className="text-sm text-red-200 bg-red-500/20 border border-red-400/30 rounded-lg px-3 py-2">{error}</div>
-              )}
-
-              <div className="flex flex-col sm:flex-row gap-3">
-                <button onClick={createReceipt} disabled={submitting} className="flex-1 bg-emerald-500 hover:bg-emerald-600 active:bg-emerald-700 disabled:opacity-60 text-white font-medium py-2 rounded-lg transition-colors">
-                  {submitting ? 'Membuat...' : 'Buat Struk'}
-                </button>
-                <button onClick={resetAll} className="px-4 py-2 rounded-lg bg-white/10 hover:bg-white/20 border border-white/20">Reset</button>
+              <div className="mt-3 pt-3 border-t flex items-center justify-between">
+                <div className="text-sm">Subtotal</div>
+                <div className="font-semibold">{currency(subtotal)}</div>
               </div>
             </div>
-          </section>
+          )}
 
-          {/* Preview Panel */}
-          <section className="relative rounded-2xl overflow-hidden shadow-2xl border border-white/10 bg-gradient-to-b from-white to-slate-50 text-slate-900">
-            {/* Elegant watermark */}
-            <div className="pointer-events-none absolute inset-0 opacity-[0.03]" style={{backgroundImage:`url(${BRAND.logo})`, backgroundRepeat:'no-repeat', backgroundPosition:'center 40%', backgroundSize:'50%'}}></div>
+          {error && (
+            <div className="mt-3 text-sm text-red-700 bg-red-50 border border-red-200 rounded px-3 py-2">{error}</div>
+          )}
 
-            {/* Receipt content to capture */}
-            <div ref={previewRef} className="relative">
-              {/* Header */}
-              <div className="bg-gradient-to-r from-fuchsia-600 to-indigo-600 text-white p-6">
-                <div className="flex items-center gap-4">
-                  <img src={BRAND.logo} alt="logo" className="h-12 w-12 rounded-lg bg-white/20 p-1" />
-                  <div>
-                    <h3 className="text-xl font-semibold tracking-wide">{BRAND.name}</h3>
-                    <p className="text-xs text-white/90">Nomor: {BRAND.phone}</p>
-                  </div>
-                  <div className="ml-auto">
-                    <span className="inline-flex items-center gap-2 bg-white/20 px-3 py-1.5 rounded-full text-xs">
-                      <span className="h-2 w-2 rounded-full bg-emerald-300"></span>
-                      {receipt ? `No. ${receipt.number.toString().padStart(4,'0')}` : 'Draft'}
-                    </span>
-                  </div>
-                </div>
-              </div>
+          <div className="mt-4 flex gap-3">
+            <button onClick={createReceipt} disabled={submitting} className="px-4 py-2 rounded bg-emerald-600 text-white text-sm disabled:opacity-50">
+              {submitting ? 'Membuat…' : 'Buat Struk'}
+            </button>
+            <a href="/test" className="px-4 py-2 rounded border text-sm">Tes Koneksi</a>
+          </div>
+        </section>
 
-              {/* Body */}
-              <div className="p-6">
-                <div className="grid sm:grid-cols-2 gap-4 text-sm mb-4">
-                  <div className="rounded-xl bg-white shadow-sm border border-slate-200 p-4">
-                    <p className="text-slate-500">Tanggal</p>
-                    <p className="font-semibold mt-1">{new Date().toLocaleString('id-ID')}</p>
-                  </div>
-                  <div className="rounded-xl bg-white shadow-sm border border-slate-200 p-4">
-                    <p className="text-slate-500">Pelanggan</p>
-                    <p className="font-semibold mt-1">{receipt?.customer_name || customerName || '-'}</p>
-                  </div>
+        {/* Receipt Preview (Thermal style 58/80mm) */}
+        <section className="flex items-start justify-center">
+          <div className="bg-white border rounded-xl p-4 w-full max-w-[380px]">
+            <div className="text-xs text-slate-500 mb-2">Pratinjau Struk</div>
+
+            {/* CAPTURED AREA ONLY */}
+            <div ref={receiptRef} className="mx-auto bg-white text-black p-4 rounded shadow-sm" style={{ width: 336 }}>
+              {/* Thermal look: mono, tight spacing */}
+              <div className="font-mono text-[13px] leading-5">
+                {/* Header */}
+                <div className="text-center">
+                  <img src={BRAND.logo} alt="logo" crossOrigin="anonymous" className="mx-auto mb-2 h-12 w-12" />
+                  <div className="font-bold text-[14px] tracking-wide">{BRAND.name}</div>
+                  <div className="text-[12px]">{BRAND.phone}</div>
                 </div>
 
-                <div className="rounded-xl border border-slate-200 overflow-hidden bg-white">
-                  <table className="w-full text-sm">
-                    <thead className="bg-slate-50">
-                      <tr>
-                        <th className="text-left px-3 py-2">Item</th>
-                        <th className="text-right px-3 py-2">Qty</th>
-                        <th className="text-right px-3 py-2">Harga</th>
-                        <th className="text-right px-3 py-2">Total</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {(receipt?.items || items).map((it, idx) => (
-                        <tr key={idx} className="odd:bg-white even:bg-slate-50">
-                          <td className="px-3 py-2">{it.name}</td>
-                          <td className="px-3 py-2 text-right">{it.quantity}</td>
-                          <td className="px-3 py-2 text-right">{currency(it.price)}</td>
-                          <td className="px-3 py-2 text-right">{currency(it.quantity * it.price)}</td>
-                        </tr>
-                      ))}
-                      {(receipt?.items || items).length === 0 && (
-                        <tr>
-                          <td className="px-3 py-6 text-center text-slate-400" colSpan={4}>Belum ada item</td>
-                        </tr>
-                      )}
-                    </tbody>
-                    <tfoot>
-                      <tr className="bg-slate-50 border-t">
-                        <td className="px-3 py-2 font-semibold" colSpan={3}>Subtotal</td>
-                        <td className="px-3 py-2 text-right font-semibold">{currency(receipt?.subtotal ?? items.reduce((s, it) => s + it.quantity * it.price, 0))}</td>
-                      </tr>
-                      <tr>
-                        <td className="px-3 py-3 text-slate-500 text-xs" colSpan={4}>Catatan: {receipt?.notes || notes || '-'}</td>
-                      </tr>
-                    </tfoot>
-                  </table>
+                <div className="my-2 border-t border-dashed" />
+
+                {/* Meta */}
+                <div className="flex justify-between text-[12px]">
+                  <div>Tanggal</div>
+                  <div>{new Date().toLocaleString('id-ID')}</div>
+                </div>
+                <div className="flex justify-between text-[12px]">
+                  <div>No. Struk</div>
+                  <div>{receipt ? String(receipt.number).padStart(4,'0') : 'DRAFT'}</div>
+                </div>
+                <div className="flex justify-between text-[12px]">
+                  <div>Pelanggan</div>
+                  <div className="text-right max-w-[55%] truncate">{receipt?.customer_name || customerName || '-'}</div>
                 </div>
 
-                <div className="mt-6 flex items-center justify-between">
-                  <p className="text-xs text-slate-500">Terima kasih telah bertransaksi di {BRAND.name}</p>
-                  <div className="flex gap-3">
-                    <button onClick={downloadReceipt} disabled={!receipt || downloading} className="px-4 py-2 rounded-lg bg-indigo-600 text-white disabled:opacity-50">
-                      {downloading ? 'Menyiapkan...' : 'Unduh'}
-                    </button>
-                    <a href="/test" className="px-4 py-2 rounded-lg bg-slate-200 text-slate-800">Tes Koneksi</a>
-                  </div>
+                <div className="my-2 border-t border-dashed" />
+
+                {/* Items */}
+                {renderItems(receipt?.items || items)}
+
+                <div className="my-2 border-t border-dashed" />
+
+                {/* Totals */}
+                <div className="flex justify-between font-bold">
+                  <div>Total</div>
+                  <div>{currency(receipt?.total ?? liveSubtotal)}</div>
+                </div>
+
+                {/* Notes */}
+                <div className="mt-2 text-[12px]">Catatan: {receipt?.notes || notes || '-'}</div>
+
+                <div className="my-2 border-t border-dashed" />
+
+                {/* Footer */}
+                <div className="text-center text-[12px]">
+                  <div>Terima kasih!</div>
+                  <div>Barang sudah diterima dengan baik.</div>
                 </div>
               </div>
             </div>
-          </section>
-        </div>
-      </main>
+            {/* END CAPTURED AREA */}
+
+            {/* Controls kept OUTSIDE capture */}
+            <div className="mt-3 text-xs text-slate-500">Tampilan unduhan hanya area putih di atas.</div>
+          </div>
+        </section>
+      </div>
     </div>
   )
 }
